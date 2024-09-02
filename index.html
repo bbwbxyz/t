@@ -1,0 +1,215 @@
+$ErrorActionPreference = "Stop"; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# 检查当前用户是否属于管理员组
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (!$isAdmin)
+{
+	Write-Host "很遗憾! 电脑当前登陆的用户『$($env:USERNAME)』没有管理员权限, 我无法执行! `n若仍想执行, 请按如下步骤操作:`n`n1.先注销当前用户,选择『Administrator』帐户登陆;`n2.然后执行D盘下名为『__将$($env:USERNAME)用户加入管理员组.bat』的文件;`n3.重启系统,选择『$($env:USERNAME)』用户登陆;`n4.再次尝试在运行框中执行我`n`n20秒后自动退出！"
+	$cmdContent = @"
+%1 mshta vbscript:CreateObject("Shell.Application").ShellExecute("cmd.exe","/c %~s0 ::","","runas",1)(window.close)&&exit
+net localgroup Administrators "$env:USERNAME" /add
+echo "$env:USERNAME 用户, 已成功添加到管理员组!"
+"@
+	Set-Content -Path "D:\__将$($env:USERNAME)用户加入管理员组.bat" -Value $cmdContent
+    sleep 20
+    exit
+}
+
+function downloadFiles
+{
+    param (
+        [Parameter(Mandatory = $true)]
+        [array]$files
+    )
+    
+    function DownloadFileFromUrl
+    {
+        param (
+            [string]$url,
+            [string]$outputPath
+        )
+        try
+        {
+            Write-Host "正在从 $url 下载..."
+            (New-Object System.Net.WebClient).DownloadFile($url, $outputPath)
+            return $true
+        }
+        catch
+        {
+            Write-Host "从 $url 下载失败。"
+            return $false
+        }
+    }
+    
+    function VerifyFileHash
+    {
+        param (
+            [string]$filePath,
+            [string]$expectedHash
+        )
+        try
+        {
+            $stream = [System.IO.File]::OpenRead($filePath)
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            $computedHashBytes = $sha256.ComputeHash($stream)
+            $stream.Close()
+            $computedHash = [BitConverter]::ToString($computedHashBytes) -replace '-'
+            return $computedHash -eq $expectedHash
+        }
+        catch
+        {
+            Write-Host "文件哈希验证失败。"
+            return $false
+        }
+    }
+    
+    foreach ($file in $files)
+    {
+        $urls = $file.urls
+        $hash = $file.hash
+        $name = $file.name
+        $targDir = $file.targDir
+        
+        # 设置文件路径
+        $tempFilePath = [System.IO.Path]::Combine($targDir, $name)
+        
+        # 确保目标文件夹存在
+        if (-not (Test-Path $targDir))
+        {
+            New-Item -Path $targDir -ItemType Directory | Out-Null
+        }
+
+        # 检查文件是否存在以及哈希值是否匹配
+        if (Test-Path $tempFilePath)
+        {
+            Write-Host "$name 已经存在。正在验证哈希..."
+            if (VerifyFileHash -filePath $tempFilePath -expectedHash $hash)
+            {
+                Write-Host "文件 $name 已存在且哈希匹配。跳过下载。"
+                continue
+            }
+            else
+            {
+                Write-Host "文件 $name 已存在，但哈希不匹配。正在删除文件..."
+                Remove-Item $tempFilePath
+            }
+        }
+        
+        $downloadSuccess = $false
+        
+        foreach ($url in $urls)
+        {
+            if (DownloadFileFromUrl -url $url -outputPath $tempFilePath)
+            {
+                if (VerifyFileHash -filePath $tempFilePath -expectedHash $hash)
+                {
+                    Write-Host "文件 $name 下载并哈希验证成功。"
+                    $downloadSuccess = $true
+                    break # 跳出循环，停止尝试其他 URL
+                }
+                else
+                {
+                    Write-Host "从 $url 下载的文件哈希验证失败。"
+                }
+            }
+            else
+            {
+                Write-Host "从 $url 下载失败。"
+            }
+        }
+        
+        if (-not $downloadSuccess)
+        {
+            Write-Error "所有下载 $name 的尝试均失败或哈希验证失败。"
+            exit
+        }
+        
+        Write-Host "`n已下载：$($name)`n"
+    }
+}
+
+# 文件列表参数
+$targDir = "$env:SystemDrive\BOOT"
+$files = @(
+	@{
+		urls = @(
+			"https://0laygw.dm.files.1drv.com/y4mp8dHdwE7AY3PS_dxsJFO3SMcDvzS7suR1LTJnMF0sy4bnovF2lbJs5lectXSZlA7BCOcyvVZu3vuwVoV2UFHPDFEwO1BrWXTDRrT9Ej7S3lA0uPAff2JAJ-SVSSUiVbGJIKeXjsTfgfE800--3exBLfW8MyrZ8nQt3Ht5TqjobWEfkuxLy6NQWkuKnB6IxXZoWbLmk1vTHTCO5PmGFNjNA"
+		)
+		hash = 'FD9C0F38DD4A75632A4F5B94DD1977660F4A6FD53AE501FCE976F430C5885724'
+		name = "BOOT.SDI"
+		targDir = $targDir
+	},
+	@{
+		urls = @(
+			"https://d4g3zw.dm.files.1drv.com/y4m6n4ynyiWxPVlx0yGkRaFrmCxD2B0CcRZXsGHoktZuiGcwojbX6_r38bbdfCU49hG3-XHaBDvrHyMNV5XeKmlzh5R4Ncyv8lw6rdexPHpjBArsbmANtyNGCxoZADL8zn-gNUvZZ42j_nXCcuAaOeb-LlssXF6ZzebCaNgxxkIAl2eZVbJdXZO5KaYidZHCW7qMVKOYYgnRkYO7MC9flVIoA" #ku
+		)
+		hash = '5D89860ECAE1A37B1C07CCBC50F7A007A83519CAD4551E72954E40D828D29E97' #ku
+		name = "BOOT.wim"
+		targDir = $targDir
+	}
+)
+
+# 下载所有文件
+downloadFiles $files
+
+# 定义变量
+$id1 = "{e423cc21-44b3-455b-b26e-eb62211ce14a}"
+$id2 = "{5624ffff-8d96-11de-8e71-fffffffffffb}"
+$systemDrive = $env:systemDrive
+$bootSdiPath = "$systemDrive\BOOT\BOOT.sdi"
+$bootWimPath = "$systemDrive\BOOT\BOOT.wim"
+
+# 删除旧的引导项
+& bcdedit /delete $id1 > $null 2>&1
+& bcdedit /delete $id2 > $null 2>&1
+
+# 创建新的引导项
+& bcdedit /create $id2 /d "PE 想远程维护系统？ 先选我，再回车！" /device > $null 2>&1
+& bcdedit /set $id2 ramdisksdidevice "partition=$systemDrive" > $null 2>&1
+& bcdedit /set $id2 ramdisksdipath \BOOT\BOOT.SDI > $null 2>&1
+
+& bcdedit /create $id1 /d "PE 想远程维护系统？ 先选我，再回车！" /application osloader > $null 2>&1
+& bcdedit /set $id1 device "ramdisk=[$systemDrive]\BOOT\BOOT.wim,$id2" > $null 2>&1
+& bcdedit /set $id1 osdevice "ramdisk=[$systemDrive]\BOOT\BOOT.wim,$id2" > $null 2>&1
+
+# 检查启动模式是否为UEFI
+$bootMode = ""
+if (bcdedit /enum "{current}" | Select-String -Pattern "\.efi$") {
+    $bootMode = "UEFI"
+}
+if (bcdedit /enum "{bootmgr}" | Select-String -Pattern "\.efi$") {
+    $bootMode = "UEFI"
+}
+
+# 设置启动路径
+if ($bootMode -eq "UEFI") {
+    bcdedit /set $id1 path "\Windows\system32\boot\winload.efi" > $null 2>&1
+} else {
+    bcdedit /set $id1 path "\windows\system32\boot\winload.exe" > $null 2>&1
+}
+
+# 设置其他引导项选项
+& bcdedit /set $id1 locale zh-CN > $null 2>&1
+& bcdedit /set $id1 inherit {bootloadersettings} > $null 2>&1
+& bcdedit /set $id1 systemroot \windows > $null 2>&1
+& bcdedit /set $id1 BootMenuPolicy Legacy > $null 2>&1
+& bcdedit /set {current} BootMenuPolicy Legacy > $null 2>&1
+& bcdedit /set $id1 detecthal Yes > $null 2>&1
+& bcdedit /set $id1 winpe Yes > $null 2>&1
+& bcdedit /set $id1 ems no > $null 2>&1
+
+# 添加引导项到菜单
+& bcdedit /displayorder $id1 /addlast > $null 2>&1
+& bcdedit /timeout 5 > $null 2>&1
+
+# 创建桌面上的脚本文件，重启后进入PE
+$desk = Join-Path $env:USERPROFILE "desktop\重启后进PE.cmd"
+$cmdContent = @"
+%1 mshta vbscript:CreateObject("Shell.Application").ShellExecute("cmd.exe","/c %~s0 ::","","runas",1)(window.close)&&exit
+bcdedit /bootsequence $id1
+shutdown /r /t 1
+"@
+Set-Content -Path $desk -Value $cmdContent -Encoding ASCII
+
+bcdedit /bootsequence $id1
+shutdown /r /t 6
